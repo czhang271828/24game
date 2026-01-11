@@ -1,3 +1,19 @@
 <resources>
-    <string name="app_name">twenty_four_game</string>
+    <string name="app_name">哈基米算24点</string>
+    <string name="menu_title">☰ 题库</string>
+    <string name="solved_default">已解: 0</string>
+    <string name="timer_default">0s</string>
+    <string name="op_add">+</string>
+    <string name="op_sub">-</string>
+    <string name="op_mul">×</string>
+    <string name="op_div">÷</string>
+    <string name="undo">撤销</string>
+    <string name="skip">跳过</string>
+    <string name="hint_structure">结构</string>
+    <string name="try_solution">尝试</string>
+    <string name="answer">答案</string>
+    <string name="share">分享</string>
+    <string name="hint_normal">完整解答</string>
 </resources>
+
+<!--<string name="app_name">24点游戏(聪明哈基米版)</string>-->

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "twenty_four_game"
+rootProject.name = "TwentyFourGame"
 include(":app")
