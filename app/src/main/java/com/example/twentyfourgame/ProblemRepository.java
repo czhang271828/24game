@@ -11,7 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class ProblemRepository {
-    private static final String GITHUB_API_URL = "https://api.github.com/repos/zhangchenchengSJTU/LA-2025-2026-1--MATH1205H-04/contents/assets/24";
+    private static final String GITHUB_API_URL = "https://api.github.com/repos/czhang271828/24game/contents/data";
     private Context context;
 
     public ProblemRepository(Context context) {
@@ -23,12 +23,13 @@ public class ProblemRepository {
         void onFail(String error);
     }
 
-    // 从 GitHub 同步
     public void syncFromGitHub(SyncCallback callback) {
         new Thread(() -> {
             try {
+                clearLocalData();
                 String jsonStr = downloadString(GITHUB_API_URL);
-                if (jsonStr == null) throw new Exception("无法获取列表");
+                if (jsonStr == null) throw new Exception("无法获取文件列表");
+
                 JSONArray jsonArray = new JSONArray(jsonStr);
                 int downloadCount = 0;
                 for (int i = 0; i < jsonArray.length(); i++) {
@@ -51,7 +52,16 @@ public class ProblemRepository {
         }).start();
     }
 
-    // 加载题库
+    private void clearLocalData() {
+        File dir = context.getFilesDir();
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.getName().endsWith(".txt")) file.delete();
+            }
+        }
+    }
+
     public List<Problem> loadProblemSet(String fileName) throws Exception {
         List<Problem> problems = new ArrayList<>();
         InputStream is = getFileInputStream(fileName);
@@ -59,20 +69,42 @@ public class ProblemRepository {
 
         BufferedReader br = new BufferedReader(new InputStreamReader(is));
         String line;
-        Pattern listPattern = Pattern.compile("\\[\'(.*?)\'\\]");
+
+        // --- 修改：使用更宽容的正则，只抓取方括号内的内容 ---
+        Pattern listPattern = Pattern.compile("\\[(.*?)\\]");
 
         while ((line = br.readLine()) != null) {
             line = line.trim();
             if (line.isEmpty() || line.startsWith("#")) continue;
+
+            // 简单分割数字部分和解答部分
             String[] parts = line.split("->");
             if (parts.length < 2) continue;
 
             Matcher m = listPattern.matcher(parts[0]);
-            if (m.find()) {
-                String[] rawNums = m.group(1).split(",");
+            // 注意：某些格式开头可能是 [序号] [数字]，所以我们找最后一个匹配的 [] 作为数字列表
+            String rawNumsStr = null;
+            while (m.find()) {
+                rawNumsStr = m.group(1); // 持续更新，取最后一个方括号内容
+            }
+
+            if (rawNumsStr != null) {
+                // 清洗数据：去除单引号、双引号、空格
+                String[] rawNums = rawNumsStr.split(",");
                 List<Fraction> fracs = new ArrayList<>();
-                for (String s : rawNums) fracs.add(Fraction.parse(s.trim().replace("\'", "")));
-                if (fracs.size() == 4 || fracs.size() == 5) {
+                for (String s : rawNums) {
+                    String cleanNum = s.trim().replace("\'", "").replace("\"", "");
+                    if (!cleanNum.isEmpty()) {
+                        try {
+                            fracs.add(Fraction.parse(cleanNum));
+                        } catch (Exception e) {
+                            // 忽略解析错误的数字
+                        }
+                    }
+                }
+
+                // 兼容 3-6 个数的题目
+                if (fracs.size() >= 3 && fracs.size() <= 6) {
                     problems.add(new Problem(fracs, parts[1].trim()));
                 }
             }
@@ -80,6 +112,8 @@ public class ProblemRepository {
         br.close();
         return problems;
     }
+
+    // ... (getAvailableFiles, downloadString, saveToInternalStorage 等保持不变) ...
 
     public List<String> getAvailableFiles() {
         Set<String> fileSet = new HashSet<>();
@@ -94,7 +128,6 @@ public class ProblemRepository {
         return sortedFiles;
     }
 
-    // --- 私有辅助方法 ---
     private String downloadString(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();

@@ -9,17 +9,23 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.Menu;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.material.navigation.NavigationView;
+import com.google.android.material.slider.RangeSlider;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
@@ -27,12 +33,18 @@ public class MainActivity extends AppCompatActivity {
     private DrawerLayout drawerLayout;
     private NavigationView navigationView;
     private TextView tvScore, tvTimer, tvAvgTime;
-    private Button[] cardButtons = new Button[5];
+
+    // 核心卡片组件 (数组大小为 5)
+    private ViewGroup[] cardViews = new ViewGroup[5];
+    private TextView[] tvNums = new TextView[5];    // 分子
+    private TextView[] tvDenoms = new TextView[5];  // 分母
+    private View[] dividers = new View[5];          // 分数线
+
     private Button btnAdd, btnSub, btnMul, btnDiv;
     private Button btnUndo, btnReset, btnRedo, btnMenu;
     private Button btnTry, btnHintStruct, btnAnswer, btnShare, btnSkip;
 
-    // 核心组件
+    // 逻辑组件
     private GameManager gameManager;
     private ProblemRepository repository;
 
@@ -42,7 +54,7 @@ public class MainActivity extends AppCompatActivity {
     private Runnable timerRunnable;
     private int selectedFirstIndex = -1;
     private String selectedOperator = null;
-    private String currentFileName = "随机(4数)";
+    private String currentFileName = "休闲随机(4数)";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,11 +69,10 @@ public class MainActivity extends AppCompatActivity {
         initListeners();
 
         gameStartTime = System.currentTimeMillis();
-        loadFirstAvailableFile(); // 初始加载逻辑稍作调整调用 Repository
+        switchToRandomMode(4);
         startTimer();
     }
 
-    // --- 初始化 UI ---
     private void initViews() {
         drawerLayout = findViewById(R.id.drawer_layout);
         navigationView = findViewById(R.id.nav_view);
@@ -70,13 +81,19 @@ public class MainActivity extends AppCompatActivity {
         tvTimer = findViewById(R.id.tv_timer);
         tvAvgTime = findViewById(R.id.tv_avg_time);
 
-        cardButtons[0] = findViewById(R.id.card_1);
-        cardButtons[1] = findViewById(R.id.card_2);
-        cardButtons[2] = findViewById(R.id.card_3);
-        cardButtons[3] = findViewById(R.id.card_4);
-        cardButtons[4] = findViewById(R.id.card_5);
-        // ... 其他按钮 findViewById (省略部分重复代码) ...
-        // 请保留原有的所有 findViewById 代码
+        // 绑定 5 张卡片
+        int[] cardIds = {R.id.card_1, R.id.card_2, R.id.card_3, R.id.card_4, R.id.card_5};
+        int[] numIds = {R.id.tv_num_1, R.id.tv_num_2, R.id.tv_num_3, R.id.tv_num_4, R.id.tv_num_5};
+        int[] divIds = {R.id.divider_1, R.id.divider_2, R.id.divider_3, R.id.divider_4, R.id.divider_5};
+        int[] denIds = {R.id.tv_denom_1, R.id.tv_denom_2, R.id.tv_denom_3, R.id.tv_denom_4, R.id.tv_denom_5};
+
+        for (int i = 0; i < 5; i++) {
+            cardViews[i] = findViewById(cardIds[i]);
+            tvNums[i] = findViewById(numIds[i]);
+            dividers[i] = findViewById(divIds[i]);
+            tvDenoms[i] = findViewById(denIds[i]);
+        }
+
         btnAdd = findViewById(R.id.btn_op_add);
         btnSub = findViewById(R.id.btn_op_sub);
         btnMul = findViewById(R.id.btn_op_mul);
@@ -93,22 +110,48 @@ public class MainActivity extends AppCompatActivity {
         btnSkip = findViewById(R.id.btn_skip);
     }
 
-    // --- 逻辑与 UI 的桥梁 ---
+    // --- 核心修复: 使用 setTint 改变颜色，保留 XML 中定义的圆角 ---
+    private void setCardColor(View view, int color) {
+        if (view == null) return;
+        Drawable bg = view.getBackground();
+        if (bg != null) {
+            // mutate() 很重要，防止修改影响到其他复用该资源的视图
+            bg.mutate().setTint(color);
+        } else {
+            // 如果没有背景drawable，才回退到简单的背景色设置
+            view.setBackgroundColor(color);
+        }
+    }
+
+    private void updateCardDisplay(int index, Fraction f) {
+        if (f == null) {
+            cardViews[index].setVisibility(View.INVISIBLE);
+            return;
+        }
+
+        cardViews[index].setVisibility(View.VISIBLE);
+        tvNums[index].setText(String.valueOf(f.num));
+
+        if (f.den == 1) {
+            // 整数：隐藏横线和分母
+            dividers[index].setVisibility(View.GONE);
+            tvDenoms[index].setVisibility(View.GONE);
+        } else {
+            // 分数：显示竖式结构
+            dividers[index].setVisibility(View.VISIBLE);
+            tvDenoms[index].setVisibility(View.VISIBLE);
+            tvDenoms[index].setText(String.valueOf(f.den));
+        }
+    }
 
     private void refreshUI() {
-        // 更新卡片显示
-        if (gameManager.currentNumberCount == 4) {
-            cardButtons[4].setVisibility(View.GONE);
-        } else {
-            cardButtons[4].setVisibility(View.VISIBLE);
-        }
+        // --- 修复: 通用的显隐逻辑，支持 3, 4, 5 张牌 ---
         for (int i = 0; i < 5; i++) {
-            if (gameManager.currentNumberCount == 4 && i == 4) continue;
-            if (gameManager.cardValues[i] != null) {
-                cardButtons[i].setVisibility(View.VISIBLE);
-                cardButtons[i].setText(gameManager.cardValues[i].toString());
+            // 如果卡片索引超出了当前游戏设定的数量，则隐藏 (例如 3数模式下，索引 3,4 被隐藏)
+            if (i >= gameManager.currentNumberCount) {
+                cardViews[i].setVisibility(View.GONE);
             } else {
-                cardButtons[i].setVisibility(View.INVISIBLE);
+                updateCardDisplay(i, gameManager.cardValues[i]);
             }
         }
         updateScoreBoard();
@@ -127,8 +170,8 @@ public class MainActivity extends AppCompatActivity {
                     boolean success = gameManager.performCalculation(selectedFirstIndex, index, selectedOperator);
                     if (success) {
                         resetSelection();
-                        refreshUI(); // 刷新数据
-                        selectCard(index); // 选中结果
+                        refreshUI();
+                        selectCard(index);
                         checkWin();
                     }
                 } catch (ArithmeticException e) {
@@ -144,7 +187,8 @@ public class MainActivity extends AppCompatActivity {
             gameManager.solvedCount++;
             updateScoreBoard();
             new Handler().postDelayed(() -> {
-                gameManager.startNewGame(currentFileName.startsWith("随机"));
+                // 确保这里判断的是 "休闲随机"
+                gameManager.startNewGame(currentFileName.startsWith("休闲随机"));
                 resetSelection();
                 startTime = System.currentTimeMillis();
                 refreshUI();
@@ -153,20 +197,29 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startNewGameLocal() {
-        gameManager.startNewGame(currentFileName.startsWith("随机"));
+        // 确保这里判断的是 "休闲随机"
+        gameManager.startNewGame(currentFileName.startsWith("休闲随机"));
         startTime = System.currentTimeMillis();
         resetSelection();
         refreshUI();
     }
 
-    // --- 侧边栏与数据加载 ---
+    // --- 修改: initSidebar 增加设置入口 ---
     private void initSidebar() {
         Menu menu = navigationView.getMenu();
         menu.clear();
+
+        // 1. 设置
+        menu.add(Menu.NONE, 777, Menu.NONE, "⚙️ 题目筛选设置");
+        // (提示：你可以把设置改名为 "⚙️ 题库筛选设置"，暗示仅对题库有效，不过不改也行)
+
         menu.add(Menu.NONE, 888, Menu.NONE, "📖 游戏说明书");
         menu.add(Menu.NONE, 999, Menu.NONE, "☁️ 从 GitHub 更新题库");
-        menu.add(Menu.NONE, 0, Menu.NONE, "🎲 随机 (4数)");
-        menu.add(Menu.NONE, 1, Menu.NONE, "🎲 随机 (5数)");
+
+        // --- 修改 2: 改名为 ☕ 休闲随机 ---
+        menu.add(Menu.NONE, -1, Menu.NONE, "☕ 休闲随机 (3数)");
+        menu.add(Menu.NONE, 0, Menu.NONE, "☕ 休闲随机 (4数)");
+        menu.add(Menu.NONE, 1, Menu.NONE, "☕ 休闲随机 (5数)");
 
         List<String> files = repository.getAvailableFiles();
         int id = 2;
@@ -174,19 +227,121 @@ public class MainActivity extends AppCompatActivity {
 
         navigationView.setNavigationItemSelectedListener(item -> {
             String t = item.getTitle().toString();
-            if (t.contains("游戏说明书")) {
+            int itemId = item.getItemId();
+
+            if (itemId == 777) {
+                showSettingsDialog();
+            } else if (t.contains("游戏说明书")) {
                 showHelpDialog();
             } else if (t.contains("从 GitHub 更新")) {
                 syncFromGitHub();
             } else {
-                if (t.contains("随机 (4数)")) switchToRandomMode(4);
-                else if (t.contains("随机 (5数)")) switchToRandomMode(5);
+                // --- 修改 3: 适配新名字的判断 ---
+                if (t.contains("休闲随机 (3数)")) switchToRandomMode(3);
+                else if (t.contains("休闲随机 (4数)")) switchToRandomMode(4);
+                else if (t.contains("休闲随机 (5数)")) switchToRandomMode(5);
                 else loadProblemSet(t.substring(t.indexOf(" ") + 1));
                 drawerLayout.closeDrawer(GravityCompat.START);
             }
             return true;
         });
     }
+
+    // --- 新增: 显示设置对话框 ---
+    private void showSettingsDialog() {
+        View view = getLayoutInflater().inflate(R.layout.dialog_settings, null);
+
+        android.widget.RadioGroup rgMax = view.findViewById(R.id.rg_max_number);
+        android.widget.CheckBox cbTrivial = view.findViewById(R.id.cb_ban_trivial);
+
+        // 递进层级控件
+        android.widget.RadioGroup rgDiff = view.findViewById(R.id.rg_difficulty);
+        android.widget.RadioButton rbDiff2 = view.findViewById(R.id.rb_diff_2); // Level 2 RadioButton
+
+        // 进阶面板
+        View layoutAdvanced = view.findViewById(R.id.layout_advanced_options);
+        android.widget.CheckBox cbRational = view.findViewById(R.id.cb_rational);
+        android.widget.CheckBox cbStorm = view.findViewById(R.id.cb_storm);
+
+        // --- 回显数据 ---
+        GameSettings s = gameManager.settings;
+
+        // Max Number
+        if(s.maxNumber == 10) rgMax.check(R.id.rb_10);
+        else if(s.maxNumber == 13) rgMax.check(R.id.rb_13);
+        else if(s.maxNumber == 20) rgMax.check(R.id.rb_20);
+        else rgMax.check(R.id.rb_no_limit);
+
+        // Trivial
+        cbTrivial.setChecked(s.banTrivialMult);
+
+        // Difficulty Level
+        if (s.difficultyMode == 0) rgDiff.check(R.id.rb_diff_0);
+        else if (s.difficultyMode == 1) rgDiff.check(R.id.rb_diff_1);
+        else if (s.difficultyMode == 2) rgDiff.check(R.id.rb_diff_2);
+
+        // Advanced Options
+        cbRational.setChecked(s.enableRationalCalc);
+        cbStorm.setChecked(s.enableDivisionStorm);
+
+        // --- 核心交互：根据层级控制进阶面板显隐 ---
+        // 初始化状态
+        layoutAdvanced.setVisibility(s.difficultyMode == 2 ? View.VISIBLE : View.GONE);
+
+        rgDiff.setOnCheckedChangeListener((group, checkedId) -> {
+            if (checkedId == R.id.rb_diff_2) {
+                // 选中 "必须含除法"，显示进阶
+                layoutAdvanced.setVisibility(View.VISIBLE);
+            } else {
+                // 否则隐藏，并建议取消勾选防止逻辑残留（可选）
+                layoutAdvanced.setVisibility(View.GONE);
+                cbRational.setChecked(false);
+                cbStorm.setChecked(false);
+            }
+        });
+
+        new AlertDialog.Builder(this)
+                .setTitle("筛选设置 (对 ☕ 休闲随机模式无效)")
+                .setView(view)
+                .setPositiveButton("应用", (dialog, which) -> {
+                    // 保存设置
+                    int checkedId = rgMax.getCheckedRadioButtonId();
+                    if(checkedId == R.id.rb_10) s.maxNumber = 10;
+                    else if(checkedId == R.id.rb_13) s.maxNumber = 13;
+                    else if(checkedId == R.id.rb_20) s.maxNumber = 20;
+                    else s.maxNumber = 999;
+
+                    s.banTrivialMult = cbTrivial.isChecked();
+
+                    int diffId = rgDiff.getCheckedRadioButtonId();
+                    if (diffId == R.id.rb_diff_0) s.difficultyMode = 0;
+                    else if (diffId == R.id.rb_diff_1) s.difficultyMode = 1;
+                    else if (diffId == R.id.rb_diff_2) s.difficultyMode = 2;
+
+                    s.enableRationalCalc = cbRational.isChecked();
+                    s.enableDivisionStorm = cbStorm.isChecked();
+
+                    // 应用并刷新
+                    Toast.makeText(this, "正在应用筛选...", Toast.LENGTH_SHORT).show();
+                    if (!currentFileName.startsWith("休闲随机")) {
+                        gameManager.applyFilter();
+                    }
+
+                    boolean success = gameManager.startNewGame(currentFileName.startsWith("休闲随机"));
+                    if (success) {
+                        refreshUI();
+                    } else {
+                        new AlertDialog.Builder(this)
+                                .setTitle("⚠️ 无法生成题目")
+                                .setMessage("当前题库中没有符合该条件的题目。\n\n提示：txt题库的格式必须严格为 \" / \" (带空格) 才能被识别为除法运算。")
+                                .setPositiveButton("我知道了", null)
+                                .show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
 
     private void syncFromGitHub() {
         Toast.makeText(this, "正在连接 GitHub...", Toast.LENGTH_SHORT).show();
@@ -230,12 +385,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void switchToRandomMode(int count) {
         gameManager.currentNumberCount = count;
-        currentFileName = "随机(" + count + "数)";
+        // 更新显示的模式名称
+        currentFileName = "休闲随机(" + count + "数)";
         btnMenu.setText("☰ 模式: " + currentFileName);
         startNewGameLocal();
     }
 
-    // --- 其他 UI 辅助方法 ---
     private void showHelpDialog() {
         CharSequence helpContent = MarkdownUtils.loadMarkdownFromAssets(this, "help.md");
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -251,10 +406,83 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void doTry() {
+        List<Fraction> nums = new ArrayList<>();
+        List<Integer> idxs = new ArrayList<>();
+        // 收集当前有效的卡片
+        for(int i=0; i<5; i++) {
+            if(gameManager.cardValues[i] != null) {
+                nums.add(gameManager.cardValues[i]);
+                idxs.add(i);
+            }
+        }
+
+        if(nums.size() < 2) return;
+
+        // 暴力遍历所有两两组合
+        for(int i=0; i<nums.size(); i++) {
+            for(int j=0; j<nums.size(); j++) {
+                if(i == j) continue;
+                Fraction a = nums.get(i);
+                Fraction b = nums.get(j);
+
+                Fraction[] results = {a.add(b), a.sub(b), a.multiply(b), (b.num!=0 ? a.divide(b) : null)};
+
+                for(Fraction r : results) {
+                    if(r == null) continue;
+                    List<Fraction> nextStepNums = new ArrayList<>();
+                    nextStepNums.add(r);
+                    for(int k=0; k<nums.size(); k++) {
+                        if(k!=i && k!=j) nextStepNums.add(nums.get(k));
+                    }
+
+                    if(Solver.solve(nextStepNums) != null) {
+                        resetSelection();
+                        // --- 修复: 使用 setCardColor 保持圆角 ---
+                        setCardColor(cardViews[idxs.get(i)], Color.parseColor("#FFC0CB")); // 粉色
+                        setCardColor(cardViews[idxs.get(j)], Color.parseColor("#FFC0CB"));
+                        Toast.makeText(this, "试试这两个", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                }
+            }
+        }
+        Toast.makeText(this, "当前局面可能无解，建议撤销", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showStructureHint() {
+        String sol = gameManager.getOrCalculateSolution();
+        if (sol == null) {
+            Toast.makeText(this, "无解或计算中", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String struct = sol.replaceAll("\\d+/\\d+|\\d+", "🐈");
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("结构提示")
+                .setMessage(struct)
+                .setPositiveButton("OK", null)
+                .create();
+
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            WindowManager.LayoutParams params = dialog.getWindow().getAttributes();
+            dialog.getWindow().setGravity(Gravity.BOTTOM);
+            params.y = 200;
+            dialog.getWindow().setAttributes(params);
+        }
+    }
+
+    // --- 修复: 选中逻辑使用 setCardColor ---
     private void selectCard(int index) {
-        for(Button b : cardButtons) b.setBackgroundColor(Color.LTGRAY);
+        // 重置颜色 (灰色 #CCCCCC)
+        for(ViewGroup v : cardViews) setCardColor(v, Color.parseColor("#CCCCCC"));
+
         selectedFirstIndex = index;
-        if (index != -1) cardButtons[index].setBackgroundColor(Color.GREEN);
+
+        // 选中颜色 (绿色)
+        if (index != -1) setCardColor(cardViews[index], Color.GREEN);
     }
 
     private void resetSelection() {
@@ -280,22 +508,22 @@ public class MainActivity extends AppCompatActivity {
                 long now = System.currentTimeMillis();
                 long levelSeconds = (now - startTime) / 1000;
                 tvTimer.setText(levelSeconds + "s");
-                updateScoreBoard(); // 复用 updateScoreBoard 里的平均时间计算
+                updateScoreBoard();
                 timerHandler.postDelayed(this, 1000);
             }
         };
         timerHandler.post(timerRunnable);
     }
 
-    // --- 监听器绑定 (简化版) ---
     private void initListeners() {
         btnMenu.setOnClickListener(v -> drawerLayout.openDrawer(GravityCompat.START));
+
         for (int i = 0; i < 5; i++) {
             final int idx = i;
-            cardButtons[i].setOnClickListener(v -> onCardClicked(idx));
+            // 绑定到 ViewGroup
+            cardViews[i].setOnClickListener(v -> onCardClicked(idx));
         }
 
-        // 运算符
         View.OnClickListener opListener = v -> {
             String op = "+";
             if (v == btnSub) op = "-";
@@ -315,18 +543,19 @@ public class MainActivity extends AppCompatActivity {
         btnMul.setOnClickListener(opListener);
         btnDiv.setOnClickListener(opListener);
 
-        // 功能按钮
         btnUndo.setOnClickListener(v -> { if(gameManager.undo()) { refreshUI(); resetSelection(); } });
         btnRedo.setOnClickListener(v -> { if(gameManager.redo()) { refreshUI(); resetSelection(); } });
         btnReset.setOnClickListener(v -> { gameManager.resetCurrentLevel(); refreshUI(); resetSelection(); Toast.makeText(this, "已重置", Toast.LENGTH_SHORT).show(); });
 
         btnSkip.setOnClickListener(v -> startNewGameLocal());
+        btnTry.setOnClickListener(v -> doTry());
+        btnHintStruct.setOnClickListener(v -> showStructureHint());
+
         btnAnswer.setOnClickListener(v -> {
             String sol = gameManager.getOrCalculateSolution();
             new AlertDialog.Builder(this).setTitle("答案").setMessage(sol!=null?sol:"无解").setPositiveButton("OK", null).show();
         });
 
-        // Share, Try, Hint 等可参考上面的模式，从 GameManager 获取数据后显示
         btnShare.setOnClickListener(v -> {
             StringBuilder sb = new StringBuilder("24点挑战:\n");
             for (Fraction f : gameManager.cardValues) if (f!=null) sb.append("🐈").append(f).append("\n");
