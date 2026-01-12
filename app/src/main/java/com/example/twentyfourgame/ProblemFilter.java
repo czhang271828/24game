@@ -6,12 +6,13 @@ import java.util.regex.Pattern;
 
 public class ProblemFilter {
 
+    // 定义平凡乘数集合：1, 2, 3, 4, 6, 8, 12
+    private static final int[] TRIVIAL_FACTORS = {1, 2, 3, 4, 6, 8, 12};
+
     public static boolean isValid(List<Fraction> numbers, String solution, GameSettings settings) {
         if (solution == null || solution.equals("No Solution")) return false;
 
-        // --- 0. 数字上界 (核心修复) ---
-        // 逻辑: 如果题目中全是整数 (den==1)，则应用上界检查。
-        //       如果题目中包含任意一个分数 (den!=1)，则视为“分数模式”，跳过上界检查。
+        // --- 0. 数字上界检查 ---
         if (settings.maxNumber != 999) {
             boolean hasFraction = false;
             for (Fraction f : numbers) {
@@ -20,8 +21,6 @@ public class ProblemFilter {
                     break;
                 }
             }
-
-            // 只有在“纯整数”情况下才检查大小
             if (!hasFraction) {
                 for (Fraction f : numbers) {
                     if (f.num > settings.maxNumber) return false;
@@ -29,49 +28,47 @@ public class ProblemFilter {
             }
         }
 
-        // --- 1. 禁止平凡乘法 ---
+        // --- 1. 禁止平凡乘法 (修复版) ---
         if (settings.banTrivialMult) {
-            String s = solution.replace(" ", "");
-            if (s.endsWith("*1") || s.endsWith("*2") || s.endsWith("*3") || s.endsWith("*4") ||
-                    s.endsWith("*6") || s.endsWith("*8") || s.endsWith("*12")) return false;
-            if (s.startsWith("1*") || s.startsWith("2*") || s.startsWith("3*") || s.startsWith("4*") ||
-                    s.startsWith("6*") || s.startsWith("8*") || s.startsWith("12*")) return false;
+            // A. 正则匹配字面量 (修复：加空格判定，避免 *12 被误判为 *2)
+            // 匹配结尾是 "* 2" 或 "* (2)" 形式，且前方有非数字边界
+            if (matchesTrivialLiteral(solution, true)) return false; // 检查结尾
+            if (matchesTrivialLiteral(solution, false)) return false; // 检查开头 (如 2 * ...)
+
+            // B. 尝试检测 (2+4)*(5-1) 这种隐式平凡乘法
+            // 这需要解析最后一步运算是否是乘法，且右操作数的值是否平凡
+            if (isImplicitTrivialMult(solution)) return false;
         }
 
-        // --- 运算符判定 (使用正则精准匹配) ---
+        // --- 运算符判定 ---
 
-        // 匹配 " / " (前后有空白字符的除号)，避免匹配到分数 "1/3"
-        // 如果文件格式非常紧凑如 "1/3/4"，可能没有空格，这时可以用更复杂的正则，
-        // 但根据你的描述，txt中解答是有空格的。
-        // 保险起见，我们计算：总斜杠数 - 分数线数 = 运算符除号数
-
+        // 统计真正的除号 (排除分数线)
         int totalSlashes = countOccurrences(solution, "/");
-        int fractionSlashes = countRegexMatches(solution, "\\d+/\\d+"); // 匹配 1/3 这种结构
-
-        // 真正的除法运算数量
-        int opDivCount = totalSlashes - fractionSlashes;
-        // 如果减出来小于0 (极端情况)，修正为0
-        if (opDivCount < 0) opDivCount = 0;
+        int fractionSlashes = countRegexMatches(solution, "\\d+/\\d+");
+        int opDivCount = Math.max(0, totalSlashes - fractionSlashes);
 
         boolean hasOpDiv = opDivCount > 0;
         boolean hasMul = solution.contains("*");
         boolean hasAdd = solution.contains("+");
         boolean hasSub = solution.contains("-");
 
-        // --- 层级递进逻辑 ---
-
-        // Level 1: 禁止纯加减
+        // --- Level 1: 禁止纯加减 ---
         if (settings.difficultyMode >= 1) {
             if (!hasMul && !hasOpDiv) return false;
         }
 
-        // Level 2: 必须含除法
+        // --- Level 2: 必须含除法 ---
         if (settings.difficultyMode >= 2) {
             if (!hasOpDiv) return false;
 
-            // 进阶 A: 出现有理分数加减
+            // 进阶 A: 出现有理分数加减 (修复版)
             if (settings.enableRationalCalc) {
+                // 原逻辑只检查了加减号，现在必须确认存在“真分数”参与运算
+                // 且该题目确实包含了分数的加法或减法
                 if (!hasAdd && !hasSub) return false;
+
+                // 核心修复：检查字符串中是否包含无法整除的分数 (如 1/3, 8/3)，排除 4/2, 3/1
+                if (!containsNonIntegerFraction(solution)) return false;
             }
 
             // 进阶 B: 除法风暴
@@ -82,6 +79,148 @@ public class ProblemFilter {
         }
 
         return true;
+    }
+
+    // --- 辅助方法 ---
+
+    /**
+     * 检查字符串中是否包含真正的分数 (非整数)
+     * 例如 "1/3" -> true, "4/2" -> false
+     */
+    private static boolean containsNonIntegerFraction(String solution) {
+        Pattern p = Pattern.compile("(\\d+)/(\\d+)");
+        Matcher m = p.matcher(solution);
+        while (m.find()) {
+            try {
+                int num = Integer.parseInt(m.group(1));
+                int den = Integer.parseInt(m.group(2));
+                if (den != 0 && num % den != 0) {
+                    return true; // 发现一个真分数
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        return false;
+    }
+
+    /**
+     * 使用正则检查字面量的平凡乘法
+     * @param checkEnd true查结尾 (* 2), false查开头 (2 *)
+     */
+    private static boolean matchesTrivialLiteral(String sol, boolean checkEnd) {
+        for (int val : TRIVIAL_FACTORS) {
+            // Regex解释:
+            // \\* 匹配乘号
+            // \\s* 允许任意空格
+            // val 匹配数字
+            // (?![\\d]) 负向先行断言，确保数字后面不是另一个数字 (防止 *2 匹配 *20)
+            String pattern;
+            if (checkEnd) {
+                // 匹配结尾，例如 "... * 2" 或 "... * 2)"
+                // 注意：解答可能以括号结尾，如 (...)*2
+                pattern = "\\*\\s*" + val + "\\s*$";
+            } else {
+                // 匹配开头，例如 "2 * ..."
+                pattern = "^\\s*" + val + "\\s*\\*";
+            }
+
+            if (Pattern.compile(pattern).matcher(sol).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 尝试检测隐式的平凡乘法，如 (A) * (5-1)
+     * 这是一个简化的解析，只处理最后一步是乘法的情况
+     */
+    private static boolean isImplicitTrivialMult(String solution) {
+        // 1. 找到主运算符。由于可能有括号，我们从右向左扫描，寻找括号平衡时的 '*'
+        int mainMulIndex = findMainMultiplicationIndex(solution);
+        if (mainMulIndex == -1) return false;
+
+        // 2. 提取右操作数
+        String rightOperand = solution.substring(mainMulIndex + 1).trim();
+        String leftOperand = solution.substring(0, mainMulIndex).trim();
+
+        // 3. 尝试计算右操作数的值
+        Double rightVal = simpleEval(rightOperand);
+        if (rightVal != null && isTrivialValue(rightVal)) return true;
+
+        // 4. 同理检查左操作数 (比如 2 * (3+5))
+        Double leftVal = simpleEval(leftOperand);
+        if (leftVal != null && isTrivialValue(leftVal)) return true;
+
+        return false;
+    }
+
+    private static int findMainMultiplicationIndex(String str) {
+        int balance = 0;
+        // 从右向左扫描
+        for (int i = str.length() - 1; i >= 0; i--) {
+            char c = str.charAt(i);
+            if (c == ')') balance++;
+            else if (c == '(') balance--;
+            else if (c == '*' && balance == 0) {
+                return i;
+            }
+        }
+        return -1; // 没有找到主乘号
+    }
+
+    // 极其简化的求值器，只处理 "(5-1)" 或 "3" 这种简单情况
+    // 复杂的嵌套不处理，避免过度设计
+    private static Double simpleEval(String expr) {
+        expr = expr.trim();
+        // 去除外层括号 (可能有多个)
+        while (expr.startsWith("(") && expr.endsWith(")")) {
+            // 确保括号是配对的，例如 "(1+2)*(3+4)" 不能去掉两头
+            if (isValidParenthesis(expr.substring(1, expr.length()-1))) {
+                expr = expr.substring(1, expr.length() - 1).trim();
+            } else {
+                break;
+            }
+        }
+
+        // 如果是纯数字
+        if (expr.matches("-?\\d+")) return (double) Integer.parseInt(expr);
+
+        // 简单的 A +/- B 形式
+        // 再次扫描找主加减号
+        int balance = 0;
+        for (int i = expr.length() - 1; i >= 0; i--) {
+            char c = expr.charAt(i);
+            if (c == ')') balance++;
+            else if (c == '(') balance--;
+            else if ((c == '+' || c == '-') && balance == 0) {
+                String left = expr.substring(0, i);
+                String right = expr.substring(i + 1);
+                Double lVal = simpleEval(left);
+                Double rVal = simpleEval(right);
+                if (lVal != null && rVal != null) {
+                    return c == '+' ? lVal + rVal : lVal - rVal;
+                }
+            }
+        }
+        return null; // 无法计算 (可能是分数表达式或其他)
+    }
+
+    // 检查去括号后的字符串括号是否依然平衡
+    private static boolean isValidParenthesis(String str) {
+        int balance = 0;
+        for (char c : str.toCharArray()) {
+            if (c == '(') balance++;
+            else if (c == ')') balance--;
+            if (balance < 0) return false;
+        }
+        return balance == 0;
+    }
+
+    private static boolean isTrivialValue(double val) {
+        for (int t : TRIVIAL_FACTORS) {
+            if (Math.abs(val - t) < 0.0001) return true;
+        }
+        return false;
     }
 
     private static int countOccurrences(String str, String sub) {
