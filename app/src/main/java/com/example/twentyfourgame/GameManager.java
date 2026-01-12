@@ -1,159 +1,151 @@
+// 完全替换你的 GameManager.java 文件内容
 package com.example.twentyfourgame;
 
 import java.util.*;
 
 public class GameManager {
-    // 支持最大6个数，这里开辟空间
-    public Fraction[] cardValues = new Fraction[6];
-    public Fraction[] initialValues = new Fraction[6];
+    // 1. 数据结构升级: 使用 List<Number> 代替 Fraction[]
+    public List<Number> cardValues = new ArrayList<>();
+    private List<Number> initialValues = new ArrayList<>();
 
-    // --- 核心修复：定义 settings 变量 ---
+    private Stack<List<Number>> undoStack = new Stack<>();
+    private Stack<List<Number>> redoStack = new Stack<>();
+
     public GameSettings settings = new GameSettings();
-
-    private Stack<Fraction[]> undoStack = new Stack<>();
-    private Stack<Fraction[]> redoStack = new Stack<>();
-
-    // 保存完整的题库和筛选后的题库
     private List<Problem> fullProblemSet = new ArrayList<>();
     private List<Problem> filteredProblemSet = new ArrayList<>();
+
+    // 2. 添加游戏模式状态
+    public enum GameMode { RATIONAL, GAUSSIAN }
+    public GameMode currentMode = GameMode.RATIONAL; // 默认模式
 
     public int currentNumberCount = 4;
     public int solvedCount = 0;
     private int currentProblemIndex = -1;
     public String currentLevelSolution = null;
 
-    // 设置题库
-    public void setProblemSet(List<Problem> problems) {
-        this.fullProblemSet = new ArrayList<>(problems);
-        applyFilter(); // 加载新题库时立即筛选
+    /**
+     * 3. 新的、通用的设题入口
+     * @param numbers 当前关卡的数字列表
+     */
+    public void setProblem(List<Number> numbers) {
+        undoStack.clear();
+        redoStack.clear();
+        this.currentNumberCount = numbers.size();
+        this.cardValues = new ArrayList<>(numbers);
+        this.initialValues = new ArrayList<>(numbers);
+        this.currentLevelSolution = Solver.solve(numbers); // 预计算答案
     }
 
-    // 应用筛选逻辑 (仅对题库有效)
+    // setProblemSet 和 applyFilter 保持不变
+    public void setProblemSet(List<Problem> problems) {
+        this.fullProblemSet = new ArrayList<>(problems);
+        applyFilter();
+    }
+
     public void applyFilter() {
         filteredProblemSet.clear();
         for (Problem p : fullProblemSet) {
+            // 假设 ProblemFilter.isValid 也能处理 List<Number>
             if (ProblemFilter.isValid(p.numbers, p.solution, settings)) {
                 filteredProblemSet.add(p);
             }
         }
         Collections.shuffle(filteredProblemSet);
         currentProblemIndex = -1;
-        solvedCount = 0;
     }
 
-    // 开始新游戏 (返回 boolean 表示是否成功生成)
+    // startNewGame 现在只决定生成哪种类型的关卡
     public boolean startNewGame(boolean isRandomMode) {
-        undoStack.clear();
-        redoStack.clear();
-
-        boolean success = generateLevel(isRandomMode);
-
-        if (success) {
-            // 确保 initialValues 长度足够
-            if (initialValues.length < cardValues.length) {
-                initialValues = new Fraction[cardValues.length];
-            }
-            // 备份初始状态用于重置
-            for(int i=0; i<cardValues.length; i++) initialValues[i] = cardValues[i];
+        if (!isRandomMode) {
+            if (filteredProblemSet.isEmpty()) return false;
+            currentProblemIndex = (currentProblemIndex + 1) % filteredProblemSet.size();
+            Problem prob = filteredProblemSet.get(currentProblemIndex);
+            setProblem(prob.numbers);
+            this.currentLevelSolution = prob.solution;
             return true;
         } else {
-            return false;
-        }
-    }
-
-    private boolean generateLevel(boolean isRandomMode) {
-        // 清空当前牌面
-        for(int i=0; i<cardValues.length; i++) cardValues[i] = null;
-
-        if (!isRandomMode) {
-            // --- 题库模式 ---
-            if (filteredProblemSet.isEmpty()) {
-                return false; // 筛选后无题
-            } else {
-                currentProblemIndex++;
-                if (currentProblemIndex >= filteredProblemSet.size()) {
-                    currentProblemIndex = 0;
-                    Collections.shuffle(filteredProblemSet);
-                }
-                Problem prob = filteredProblemSet.get(currentProblemIndex);
-
-                currentNumberCount = prob.numbers.size();
-                for (int i = 0; i < currentNumberCount; i++) cardValues[i] = prob.numbers.get(i);
-                currentLevelSolution = prob.solution;
-                return true;
-            }
-        } else {
-            // --- 休闲随机模式 ---
             return generateRandomLevel();
         }
     }
 
-    // 随机生成逻辑
     private boolean generateRandomLevel() {
         Random rand = new Random();
-        int attempts = 0;
-        int MAX_ATTEMPTS = 1000;
+        int maxAttempts = 1000;
 
-        while(attempts < MAX_ATTEMPTS) {
-            attempts++;
-            List<Fraction> nums = new ArrayList<>();
-
-            // 休闲模式：仅保留数字上界设置 (默认13)
-            int max = (settings.maxNumber == 999) ? 13 : settings.maxNumber;
-
-            for(int i=0; i<currentNumberCount; i++) {
-                nums.add(new Fraction(rand.nextInt(max) + 1, 1));
+        for (int i = 0; i < maxAttempts; i++) {
+            List<Number> nums = new ArrayList<>();
+            if (currentMode == GameMode.RATIONAL) {
+                int max = (settings.maxNumber == 999) ? 13 : settings.maxNumber;
+                for (int j = 0; j < currentNumberCount; j++) {
+                    nums.add(new Fraction(rand.nextInt(max) + 1, 1));
+                }
+            } else { // GAUSSIAN 模式
+                // 为了确保有解，生成共轭对是很好的策略
+                nums.add(new ComplexNumber(rand.nextInt(5) + 1, 0)); // 随机实数
+                nums.add(new ComplexNumber(rand.nextInt(5) + 1, 0)); // 随机实数
+                double realPart = rand.nextInt(3) + 1;
+                double imagPart = rand.nextInt(3) + 1;
+                nums.add(new ComplexNumber(realPart, imagPart));      // a + bi
+                nums.add(new ComplexNumber(realPart, -imagPart));     // a - bi (共轭)
+                Collections.shuffle(nums); // 打乱顺序
             }
 
-            String sol = Solver.solve(nums);
-
-            // 休闲模式核心：只要有解 (sol != null) 即可，不进行 ProblemFilter 过滤
-            if(sol != null) {
-                for(int i=0; i<cardValues.length; i++) cardValues[i] = null;
-                for(int i=0; i<currentNumberCount; i++) cardValues[i] = nums.get(i);
-                currentLevelSolution = sol;
+            if (Solver.solve(nums) != null) {
+                setProblem(nums); // 使用新入口点设置游戏
                 return true;
             }
         }
-
         return false;
     }
 
+    // 4. 重构 checkWin
     public boolean checkWin() {
         int count = 0;
-        Fraction last = null;
-        for (Fraction f : cardValues) if (f != null) { count++; last = f; }
-        return count == 1 && last != null && last.isValue(24);
+        Number last = null;
+        for (Number n : cardValues) {
+            if (n != null) {
+                count++;
+                last = n;
+            }
+        }
+        return count == 1 && last != null && last.isEqualTo(24);
     }
 
+    // 5. 重构 performCalculation
     public boolean performCalculation(int idx1, int idx2, String op) {
-        Fraction f1 = cardValues[idx1];
-        Fraction f2 = cardValues[idx2];
-        Fraction result = null;
-
-        switch (op) {
-            case "+": result = f1.add(f2); break;
-            case "-": result = f1.sub(f2); break;
-            case "*": result = f1.multiply(f2); break;
-            case "/": result = f1.divide(f2); break;
+        if (idx1 >= cardValues.size() || idx2 >= cardValues.size() || cardValues.get(idx1) == null || cardValues.get(idx2) == null) {
+            return false;
         }
 
-        // 保存撤销状态
-        if(undoStack.isEmpty() || !Arrays.equals(undoStack.peek(), cardValues)){
-            Fraction[] state = new Fraction[cardValues.length];
-            System.arraycopy(cardValues, 0, state, 0, cardValues.length);
-            undoStack.push(state);
-        }
+        Number n1 = cardValues.get(idx1);
+        Number n2 = cardValues.get(idx2);
+        Number result = null;
+
+        undoStack.push(new ArrayList<>(cardValues));
         redoStack.clear();
 
-        cardValues[idx2] = result;
-        cardValues[idx1] = null;
+        switch (op) {
+            case "+": result = n1.add(n2); break;
+            case "-": result = n1.subtract(n2); break;
+            case "*": result = n1.multiply(n2); break;
+            case "/": result = n1.divide(n2); break;
+        }
+
+        if (result == null || (result instanceof ComplexNumber && ((ComplexNumber) result).isNaN())) {
+            undoStack.pop();
+            return false;
+        }
+
+        cardValues.set(idx2, result);
+        cardValues.set(idx1, null);
         return true;
     }
 
+    // 6. 重构 undo/redo
     public boolean undo() {
         if (!undoStack.isEmpty()) {
-            redoStack.push(cardValues.clone());
+            redoStack.push(new ArrayList<>(cardValues));
             cardValues = undoStack.pop();
             return true;
         }
@@ -162,11 +154,7 @@ public class GameManager {
 
     public boolean redo() {
         if (!redoStack.isEmpty()) {
-            if(undoStack.isEmpty() || !Arrays.equals(undoStack.peek(), cardValues)){
-                Fraction[] state = new Fraction[cardValues.length];
-                System.arraycopy(cardValues, 0, state, 0, cardValues.length);
-                undoStack.push(state);
-            }
+            undoStack.push(new ArrayList<>(cardValues));
             cardValues = redoStack.pop();
             return true;
         }
@@ -176,16 +164,20 @@ public class GameManager {
     public void resetCurrentLevel() {
         undoStack.clear();
         redoStack.clear();
-        System.arraycopy(initialValues, 0, cardValues, 0, initialValues.length);
+        cardValues = new ArrayList<>(initialValues);
     }
 
+    // 7. 重构 getOrCalculateSolution
     public String getOrCalculateSolution() {
         int count = 0;
-        for (Fraction f : cardValues) if (f != null) count++;
-        if (count == currentNumberCount && currentLevelSolution != null) return currentLevelSolution;
+        for (Number n : cardValues) if (n != null) count++;
+        if (count == currentNumberCount && currentLevelSolution != null) {
+            return currentLevelSolution;
+        }
 
-        List<Fraction> nums = new ArrayList<>();
-        for (Fraction f : cardValues) if (f != null) nums.add(f);
-        return Solver.solve(nums);
+        List<Number> currentNums = new ArrayList<>();
+        for (Number n : cardValues) if (n != null) currentNums.add(n);
+        return Solver.solve(currentNums);
     }
 }
+

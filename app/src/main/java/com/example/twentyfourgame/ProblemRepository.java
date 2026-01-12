@@ -23,7 +23,9 @@ public class ProblemRepository {
         void onFail(String error);
     }
 
+    // ... (syncFromGitHub, clearLocalData 等方法保持不变，省略以节省篇幅) ...
     public void syncFromGitHub(SyncCallback callback) {
+        // ... 保持原有逻辑 ...
         new Thread(() -> {
             try {
                 clearLocalData();
@@ -62,6 +64,7 @@ public class ProblemRepository {
         }
     }
 
+    // --- 核心修复：loadProblemSet ---
     public List<Problem> loadProblemSet(String fileName) throws Exception {
         List<Problem> problems = new ArrayList<>();
         InputStream is = getFileInputStream(fileName);
@@ -70,35 +73,61 @@ public class ProblemRepository {
         BufferedReader br = new BufferedReader(new InputStreamReader(is));
         String line;
 
-        // --- 修改：使用更宽容的正则，只抓取方括号内的内容 ---
+        // 1. 用于提取方括号 [] 内容的正则
         Pattern listPattern = Pattern.compile("\\[(.*?)\\]");
+
+        // 2. 核心分词正则：匹配 (元组) 或 '字符串' 或 "字符串" 或 普通数字
+        // Group 1: (1, -1) 形式的元组
+        // Group 2: '1+i' 形式的单引号字符串
+        // Group 3: "1+i" 形式的双引号字符串
+        // Group 4: 123 或 1+i (无引号)
+        Pattern tokenPattern = Pattern.compile("\\(([^)]+)\\)|'([^']*)'|\"([^\"]*)\"|([^, ]+)");
 
         while ((line = br.readLine()) != null) {
             line = line.trim();
             if (line.isEmpty() || line.startsWith("#")) continue;
 
-            // 简单分割数字部分和解答部分
             String[] parts = line.split("->");
             if (parts.length < 2) continue;
 
-            Matcher m = listPattern.matcher(parts[0]);
-            // 注意：某些格式开头可能是 [序号] [数字]，所以我们找最后一个匹配的 [] 作为数字列表
+            // 在 "->" 左侧寻找数字列表 [ ... ]
+            Matcher listMatcher = listPattern.matcher(parts[0]);
             String rawNumsStr = null;
-            while (m.find()) {
-                rawNumsStr = m.group(1); // 持续更新，取最后一个方括号内容
+            while (listMatcher.find()) {
+                rawNumsStr = listMatcher.group(1);
             }
 
             if (rawNumsStr != null) {
-                // 清洗数据：去除单引号、双引号、空格
-                String[] rawNums = rawNumsStr.split(",");
                 List<Fraction> fracs = new ArrayList<>();
-                for (String s : rawNums) {
-                    String cleanNum = s.trim().replace("\'", "").replace("\"", "");
-                    if (!cleanNum.isEmpty()) {
+                Matcher tokenMatcher = tokenPattern.matcher(rawNumsStr);
+
+                while (tokenMatcher.find()) {
+                    String cleanNum = null;
+
+                    // Case A: 元组 (1, 1) -> 需要转换为 "1+1i" 格式供 Fraction 解析
+                    if (tokenMatcher.group(1) != null) {
+                        String tupleContent = tokenMatcher.group(1);
+                        cleanNum = parseTupleToComplexString(tupleContent);
+                    }
+                    // Case B: 单引号字符串 '1+i'
+                    else if (tokenMatcher.group(2) != null) {
+                        cleanNum = tokenMatcher.group(2);
+                    }
+                    // Case C: 双引号字符串 "1+i"
+                    else if (tokenMatcher.group(3) != null) {
+                        cleanNum = tokenMatcher.group(3);
+                    }
+                    // Case D: 普通数字/无引号字符串 123 或 1+i
+                    else if (tokenMatcher.group(4) != null) {
+                        cleanNum = tokenMatcher.group(4).trim();
+                    }
+
+                    if (cleanNum != null && !cleanNum.isEmpty()) {
                         try {
+                            // 无论来源格式如何，最终都转为字符串交给 Fraction.parse
                             fracs.add(Fraction.parse(cleanNum));
                         } catch (Exception e) {
-                            // 忽略解析错误的数字
+                            // System.out.println("解析失败: " + cleanNum);
                         }
                     }
                 }
@@ -111,6 +140,42 @@ public class ProblemRepository {
         }
         br.close();
         return problems;
+    }
+
+    /**
+     * 将元组内容 "1, -1" 转换为标准复数字符串 "1-1i" 或 "1-i"
+     */
+    private String parseTupleToComplexString(String tupleContent) {
+        try {
+            String[] parts = tupleContent.split(",");
+            if (parts.length == 2) {
+                int real = Integer.parseInt(parts[0].trim());
+                int img = Integer.parseInt(parts[1].trim());
+
+                if (img == 0) return String.valueOf(real); // 纯实数
+
+                StringBuilder sb = new StringBuilder();
+                if (real != 0) sb.append(real);
+
+                if (img > 0) {
+                    if (real != 0) sb.append("+");
+                    if (img == 1) sb.append("i");
+                    else sb.append(img).append("i");
+                } else {
+                    // img < 0
+                    if (img == -1) sb.append("-i");
+                    else sb.append(img).append("i");
+                }
+
+                // 处理 (0, 1) -> "i", (0, -1) -> "-i" 的边界情况已由上述逻辑覆盖
+                // 但如果 real=0 且 img!=0，sb 开头可能是空的，这里不用担心，
+                // 比如 (0,1) -> 进入 img>0 分支 -> append("i") -> 返回 "i"
+                return sb.toString();
+            }
+        } catch (Exception e) {
+            // 解析失败，原样返回试试
+        }
+        return tupleContent;
     }
 
     // ... (getAvailableFiles, downloadString, saveToInternalStorage 等保持不变) ...

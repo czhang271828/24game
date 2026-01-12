@@ -40,34 +40,39 @@ public class ProblemFilter {
             if (isImplicitTrivialMult(solution)) return false;
         }
 
-        // --- 运算符判定 ---
+        // --- 运算符判定 (修正版) ---
 
-        // 统计真正的除号 (排除分数线)
         int totalSlashes = countOccurrences(solution, "/");
-        int fractionSlashes = countRegexMatches(solution, "\\d+/\\d+");
-        int opDivCount = Math.max(0, totalSlashes - fractionSlashes);
+
+        // 修复 1: 正则允许斜杠前后有空格 (\\s*)
+        // 这样 "8 / 3" 也能被识别为分数结构，而不仅仅是 "8/3"
+        int fractionStructureCount = countRegexMatches(solution, "(\\d+)\\s*/\\s*(\\d+)");
+
+        // 计算纯粹的运算除号 (例如 8 / (1+2))
+        // 注意：如果解法写成 (8 / 3)，正则会匹配到，fractionStructureCount 会加 1
+        // opDivCount 就会减少，这符合逻辑：8/3 被视为一个“数”而非一步“除法运算”
+        int opDivCount = Math.max(0, totalSlashes - fractionStructureCount);
 
         boolean hasOpDiv = opDivCount > 0;
         boolean hasMul = solution.contains("*");
         boolean hasAdd = solution.contains("+");
         boolean hasSub = solution.contains("-");
-
         // --- Level 1: 禁止纯加减 ---
         if (settings.difficultyMode >= 1) {
             if (!hasMul && !hasOpDiv) return false;
         }
 
-        // --- Level 2: 必须含除法 ---
+// Level 2: 必须含除法
         if (settings.difficultyMode >= 2) {
             if (!hasOpDiv) return false;
 
-            // 进阶 A: 出现有理分数加减 (修复版)
+            // 进阶 A: 出现有理分数加减
             if (settings.enableRationalCalc) {
-                // 原逻辑只检查了加减号，现在必须确认存在“真分数”参与运算
-                // 且该题目确实包含了分数的加法或减法
+                // 必须有加法或减法
                 if (!hasAdd && !hasSub) return false;
 
-                // 核心修复：检查字符串中是否包含无法整除的分数 (如 1/3, 8/3)，排除 4/2, 3/1
+                // 修复 2: 检查是否真正出现了“非整数分数”
+                // (8 / 3) 在这里会被正确识别并计算 8%3 != 0，从而返回 true
                 if (!containsNonIntegerFraction(solution)) return false;
             }
 
@@ -85,21 +90,34 @@ public class ProblemFilter {
 
     /**
      * 检查字符串中是否包含真正的分数 (非整数)
-     * 例如 "1/3" -> true, "4/2" -> false
+     * 支持带空格的格式，如 "8 / 3"
      */
     private static boolean containsNonIntegerFraction(String solution) {
-        Pattern p = Pattern.compile("(\\d+)/(\\d+)");
+        // 修改正则：允许 / 前后有空格
+        Pattern p = Pattern.compile("(\\d+)\\s*/\\s*(\\d+)");
         Matcher m = p.matcher(solution);
         while (m.find()) {
             try {
                 int num = Integer.parseInt(m.group(1));
                 int den = Integer.parseInt(m.group(2));
+                // 只有当分子不能被分母整除时 (例如 8/3)，才视为出现了分数
+                // 如果是 4/2，则只是普通的除法运算，不算分数题目
                 if (den != 0 && num % den != 0) {
-                    return true; // 发现一个真分数
+                    return true;
                 }
             } catch (NumberFormatException ignored) {}
         }
         return false;
+    }
+
+    private static int countRegexMatches(String str, String regex) {
+        Pattern p = Pattern.compile(regex);
+        Matcher m = p.matcher(str);
+        int count = 0;
+        while (m.find()) {
+            count++;
+        }
+        return count;
     }
 
     /**
@@ -234,13 +252,4 @@ public class ProblemFilter {
         return count;
     }
 
-    private static int countRegexMatches(String str, String regex) {
-        Pattern p = Pattern.compile(regex);
-        Matcher m = p.matcher(str);
-        int count = 0;
-        while (m.find()) {
-            count++;
-        }
-        return count;
-    }
 }
