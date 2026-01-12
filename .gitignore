@@ -1,3 +1,23 @@
+<<<<<<< Updated upstream
 # 忽略 Google Drive 桌面应用的临时同步文件夹
 .tmp.driveupload/
 .tmp.drivedownload/
+=======
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/.tmp.driveupload
+/.tmp.drivedownload
+>>>>>>> Stashed changes
